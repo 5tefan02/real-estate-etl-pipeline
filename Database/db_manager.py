@@ -1,84 +1,67 @@
-# db_manager_fixed.py
-import os
-from sqlalchemy import Column, Integer, String, create_engine, text
+from sqlalchemy import Column, Integer, String, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.engine import URL
-import pandas as pd
 
-# SQLAlchemy base class for ORM models
+
 Base = declarative_base()
 
-# ORM model for the "real_estate" table
 class Estate(Base):
     __tablename__ = "real_estate"
 
-    # Table columns
-    id = Column(Integer, primary_key=True, autoincrement=True)   # Auto-increment primary key
-    judet = Column(String, nullable=True)                        # County
-    oras = Column(String, nullable=True)                         # City
-    suprafata = Column(Integer, nullable=True)                   # Surface (sqm)
-    etaj = Column(String, nullable=True)                         # Floor
-    an_constructie = Column(String, nullable=True)               # Construction year
-    pret = Column(Integer, nullable=False)                       # Price (required field)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    judet = Column(String, nullable=True)
+    oras = Column(String, nullable=True)
+    suprafata = Column(Integer, nullable=True)
+    etaj = Column(String, nullable=True)
+    an_constructie = Column(String, nullable=True)
+    pret = Column(Integer, nullable=False)
 
-# Database configuration
-url = URL.create(
+
+DB_URL = URL.create(
     drivername="postgresql+psycopg2",
     username="postgres",
-    password="1234",
+    password="1234",      # 🔴 schimbă parola
     host="localhost",
     port=5432,
-    database="Scooby"
+    database="Scooby"     # 🔴 schimbă DB dacă e nevoie
 )
 
-# Create database engine (echo=True shows executed SQL in console)
-engine = create_engine(url, echo=True, future=True)
+engine = create_engine(DB_URL, echo=False, future=True)
 
-# 1) Test database connection 
-try:
-    # Open connection and run a simple SELECT to verify the database is reachable
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT 1"))
-        print("Connection successful. SELECT 1 returned ->", result.scalar_one())
-except Exception as e:
-    print("Connection error:", e)
-    raise  # Stop execution if the database can't be reached
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+    future=True
+)
 
-# 2) Create the table (if it does not exist already) 
 Base.metadata.create_all(engine)
-print("Tables created or verified.")
 
-#  3) Import data from CSV using PostgreSQL COPY (fast import) 
-CSV_PATH = "olx_imobiliare.csv"
 
-# Check if CSV file exists in the same directory
-if os.path.exists(CSV_PATH):
-    print("CSV file found:", CSV_PATH)
+def insert_estates(rezultate: list[dict]):
+    session = SessionLocal()
 
     try:
-        # Copy CSV data directly into PostgreSQL (very fast method)
-        raw_conn = engine.raw_connection()
-        try:
-            cur = raw_conn.cursor()
+        objects = [
+            Estate(
+                judet=r["judet"],
+                oras=r["oras"],
+                suprafata=r["suprafata"],
+                etaj=r["etaj"],
+                an_constructie=r["an_constructie"],
+                pret=r["pret"],
+            )
+            for r in rezultate
+        ]
 
-            # Open CSV and run the COPY command
-            with open(CSV_PATH, "r", encoding="utf-8") as f:
-                sql = """
-                COPY real_estate(judet, oras, suprafata, etaj, an_constructie, pret)
-                FROM STDIN WITH (FORMAT csv, HEADER true, DELIMITER ',');
-                """
-                cur.copy_expert(sql, f)
-
-            raw_conn.commit()  # Save changes
-            print("CSV imported using COPY.")
-        finally:
-            # Always close cursor and connection
-            cur.close()
-            raw_conn.close()
+        session.add_all(objects)
+        session.commit()
+        print(f"[DB] Inserate {len(objects)} inregistrari")
 
     except Exception as e:
-        print("Error during COPY import:", e)
+        session.rollback()
+        print("[DB] Eroare la insert:", e)
+        raise
 
-else:
-    # CSV not found, show a warning
-    print(f"CSV file not found: {CSV_PATH}. Place it in the same folder or update CSV_PATH.")
+    finally:
+        session.close()
