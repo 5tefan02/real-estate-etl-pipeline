@@ -5,48 +5,12 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from datetime import datetime
+import re
 
 def scrape_olx():
     rezultate = []
     links = []
-    #Keywords pentru a determina tipul tranzactiei
-    vanzare_keywords = [
-    "vanzare",
-    "de vanzare",
-    "se vinde",
-    "vand",
-    "vandut",     
-    "cumparare",
-    "achizitie",
-]
-    apartament_keywords = [
-    "apartament",
-    "ap.",
-    "apt",
-    "garsoniera",
-    "studio",
-    "penthouse",
-]
-    casa_keywords = [
-    "casa",
-    "casă",
-    "vila",
-    "vilă",
-    "duplex",
-    "triplex",
-    "townhouse",
-    "resedinta",
-    "locuinta individuala",
-]
-    teren_keywords = [
-    "teren",
-    "parcela",
-    "lot",
-    "intravilan",
-    "extravilan",
-    "agricol",
-    "constructibil",
-]
+
 
     driver = webdriver.Firefox(service=Service(GeckoDriverManager().install()))
     driver.get('https://www.olx.ro/imobiliare/')
@@ -66,18 +30,71 @@ def scrape_olx():
             time.sleep(2)
             soup = BeautifulSoup(driver.page_source, 'lxml')
             
-            oras = soup.find('p', class_='css-9pna1a')
-            oras = oras.text.strip() if oras else None
 
-            judete = soup.find_all("p", class_="css-3cz5o2")
-            judet = judete[1].text.strip() if len(judete) > 1 else None
+            oras_raw = soup.find('p', class_='css-9pna1a')
+            oras_raw = oras_raw.text.strip() if oras_raw else ""
+
+            judete_raw = soup.find_all("p", class_="css-3cz5o2")
+            judet_raw = judete_raw[1].text.strip() if len(judete_raw) > 1 else ""
+            
+            if any(char.isdigit() for char in oras_raw):
+                # EXCEPȚIE: Dacă este unul dintre sectoarele Bucureștiului, NU sărim peste el
+                # Folosim regex pentru a detecta "Sector" urmat de o cifră între 1 și 6
+                este_sector_valid = bool(re.search(r'Sector(ul)?\s*[1-6]', oras_raw, re.IGNORECASE))
+    
+                if not este_sector_valid:
+                    print(f"Sărit anunt: Adresă detectată în câmpul orașului -> {oras_raw}")
+                    continue  # Trece direct la următorul anunț din listă
+                
+            if judet_raw == "Bucuresti - Ilfov":
+                if "bucuresti" in oras_raw.lower():
+                    judet = "Bucuresti"
+                else:
+                    judet = "Ilfov"
+                oras = oras_raw
+            else:
+                oras = oras_raw
+                judet = judet_raw
 
 
             # Initialize variables to hold the extracted data
             suprafata = None
             etaj = None
+            perioada_constructie = None
             an_constructie = None
             compartimentare = None
+            tip_tranzactie = None
+            tip_imobiliar = None
+            platforma = "OLX"
+            camere = None
+
+            breadcrumb_list = soup.find('ol', class_='css-xv75xi')
+            if breadcrumb_list:
+                elemente_li = breadcrumb_list.find_all('li', class_='css-7dfllt')
+
+                for li in elemente_li:
+                    a_tag = li.find('a', class_='css-tyi2d1')
+                    if a_tag:
+                        text_a = a_tag.get_text(strip=True).lower()
+                        
+                        # 2. VERIFICĂM CONȚINUTUL (Fără ELSE care să reseteze)
+                        # Identificare Tranzacție
+                        if "vanzare" in text_a:
+                            tip_tranzactie = "vanzare"
+                        elif "inchiriere" in text_a or "inchiriat" in text_a:
+                            tip_tranzactie = "inchiriere"
+
+                        # Identificare Tip Imobil
+                        if "apartamente" in text_a:
+                            tip_imobiliar = "apartament"
+                        elif "case" in text_a:
+                            tip_imobiliar = "casa"
+                        elif "terenuri" in text_a:
+                            tip_imobiliar = "teren"
+
+                        if tip_imobiliar == "apartament":
+                            camere = ''.join(c for c in text_a if c.isdigit())
+
             
             elemente = soup.find_all('p', class_='css-13x8d99')
             for element in elemente:
@@ -89,47 +106,30 @@ def scrape_olx():
                 elif text.startswith('Etaj'):
                     etaj = text.split(':',1)[1].strip()
                 elif text.startswith('An constructie'):
-                    an_constructie = text.split(':',1)[1].strip()
+                    perioada_constructie = text.split(':',1)[1].strip()
                 elif text.startswith('Compartimentare'):
                     compartimentare = text.split(':',1)[1].strip()
+                if tip_imobiliar == "casa" and text.startswith('Camere'):
+                    camere = text.split(':',1)[1].strip()
+                    
+            camere_element = soup.find('p', class_='css-13x8d99')
+            if camere_element.text.strip().startswith('Camere'):
+                camere = camere_element.text.split(':', 1)[1].strip()        
+            
 
             pret = soup.find('h3', class_='css-1j840l6')
             pret_text = pret.text
             pret = int(''.join(c for c in pret_text if c.isdigit()))
             
-            tip_tranzactie_scraping = soup.find('div', class_='css-19duwlz')
+            # 1. SETĂM DEFAULT PE NONE (O singură dată, la începutul anunțului)
             
-            if tip_tranzactie_scraping:
-                tip_tranzactie_text = tip_tranzactie_scraping.text.lower()
-                if any(keyword in tip_tranzactie_text for keyword in vanzare_keywords):
-                    tip_tranzactie = 'vanzare'
-                else:
-                    tip_tranzactie = 'inchiriere'
-                    
-            tip_imobiliar = soup.find('div', class_='css-19duwlz')
-            
-            tip_imobiliar_scraping = soup.find('div', class_='css-19duwlz')
-
-            if tip_imobiliar_scraping:
-                tip_imobiliar_text = tip_imobiliar_scraping.text.lower()
-            else:
-                tip_imobiliar_text = ""
-
-            if any(keyword in tip_imobiliar_text for keyword in apartament_keywords):
-                tip_imobiliar = "apartament"
-            elif any(keyword in tip_imobiliar_text for keyword in casa_keywords):
-                tip_imobiliar = "casa"
-            elif any(keyword in tip_imobiliar_text for keyword in teren_keywords):
-                tip_imobiliar = "teren"
-            else:
-                tip_imobiliar = None        
             
             
             data = datetime.today().strftime('%Y-%m-%d')
             
             processed = False
             
-            id_raw = f"{oras}{judet}{pret}{data}"
+            id_raw = f"{oras}{judet}{tip_imobiliar}{perioada_constructie}{pret}{data}"
 
         except Exception as e:
             print(f"An error occurred: {e}")
@@ -137,24 +137,23 @@ def scrape_olx():
         
         rezultate.append({
             'id_raw': id_raw,
+            'URL_anunt': link,
             'judet': judet,
             'oras': oras,
             'suprafata': suprafata,
             'etaj': etaj,
+            'perioada_constructie': perioada_constructie,
             'an_constructie': an_constructie,
             'compartimentare': compartimentare,
+            'camere': camere,
             'pret': pret,
             'tip_tranzactie': tip_tranzactie,
             'tip_imobiliar': tip_imobiliar,
+            'platforma': platforma,
             'data': data,
             'processed': processed})
 
-        print(id_raw, judet, oras, suprafata, etaj, compartimentare, tip_tranzactie,tip_imobiliar, pret, data)
+        print(id_raw, link, judet, oras, suprafata, etaj, perioada_constructie, an_constructie, compartimentare, camere, tip_tranzactie, tip_imobiliar, platforma, pret, data)
 
     driver.quit()
     return rezultate
-
-# df = pd.DataFrame(rezultate)
-# csv_path = os.path.join(".", "raw_data.csv")
-# df.to_csv(csv_path , index=False, encoding='utf-8-sig')
-# print("Scraping completed and data saved to raw_data.csv")
